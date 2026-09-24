@@ -3,6 +3,7 @@ import { readJson } from '../utils/readJson.js';
 import { writeJson } from '../utils/writeJson.js';
 import { hashPassword, verifyPassword } from './password.js';
 
+
 // Validate the email supplied during an authentication request.
 export function validateEmail(email) {
 	// Require a string with at least one non-whitespace character.
@@ -80,7 +81,7 @@ export async function loginUser(email, password) {
 }
 
 // Remove an authenticated user's session from auth.json.
-export async function logout(token) {
+export async function logoutUser(token) {
 	// A token is required to identify the session being removed.
 	if (typeof token !== 'string' || token.trim() === '') {
 		throw new TypeError('A valid token is required');
@@ -93,6 +94,8 @@ export async function logout(token) {
 	// Persist the remaining sessions and report whether one was removed.
 	await writeJson('auth.json', remainingSessions);
 	return remainingSessions.length !== sessions.length;
+
+    
 }
 
 // Return the user associated with a valid, unexpired session token.

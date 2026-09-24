@@ -1,3 +1,6 @@
+import { registerCommand, loginCommand, logoutCommand } from './commands/authCommands.js';
+import {meCommand, updateProfileCommand } from './commands/userCommands.js';
+
 /**
  * Entry point for the CLI interface.
 */
@@ -14,6 +17,7 @@ export async function runCLI() {
             Available commands:
             register    Register a new user account
             login       Log into an existing account
+            logout      Log out of the current account
         `)
         return;
     }
@@ -22,18 +26,27 @@ export async function runCLI() {
     switch (command.toLowerCase()) {
         case 'register':
             // Handle register command
-            console.log('Register command selected')
+            await registerCommand();
             break;
 
         case 'login':
             // Handle login command
-            console.log('Login command selected')
+            await loginCommand();
             break;
-            
+
         case 'logout':
             // handle logout command
-            console.log('Logout command selected')
+            await logoutCommand();
             break;
+
+        case 'me':
+            await meCommand();
+            break;
+
+        case 'update-profile':
+            await updateProfileCommand();
+            break;
+
         default:
             console.error(`Unknown command: ${command}`);
             console.log (`
@@ -42,6 +55,8 @@ export async function runCLI() {
                 Available commands:
                 register    Register a new user account
                 login       Log into an existing account
+                logout      Log out of the current account
+                me          Display current user profile
             `)
     }
 }
