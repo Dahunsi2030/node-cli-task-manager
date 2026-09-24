@@ -60,6 +60,7 @@ export async function loginUser(email, password) {
 
 	// Store the new session with ISO timestamps for JSON persistence.
 	const session = {
+		type: 'session',
 		token,
 		userId: user.id,
 		createdAt: createdAt.toISOString(),
@@ -92,6 +93,89 @@ export async function logout(token) {
 	// Persist the remaining sessions and report whether one was removed.
 	await writeJson('auth.json', remainingSessions);
 	return remainingSessions.length !== sessions.length;
+}
+
+// Return the user associated with a valid, unexpired session token.
+export async function getCurrentUser(token) {
+	// A token is required to identify the current session.
+	if (typeof token !== 'string' || token.trim() === '') {
+		throw new TypeError('A valid token is required');
+	}
+
+	// Find only session records that match the supplied token.
+	const authRecords = await readJson('auth.json');
+	const session = authRecords.find(
+		(record) => record.type === 'session' && record.token === token
+	);
+
+	// Reject tokens that do not exist or have already expired.
+	if (!session || new Date(session.expiresAt).getTime() <= Date.now()) {
+		throw new Error('Invalid or expired session');
+	}
+
+	// Find the user connected to the valid session.
+	const users = await readJson('users.json');
+	const user = users.find((savedUser) => savedUser.id === session.userId);
+
+	if (!user) {
+		throw new Error('Invalid or expired session');
+	}
+
+	// Do not expose the stored password hash to the caller.
+	const { passwordHash, ...safeUser } = user;
+	return safeUser;
+}
+
+// Update the editable profile fields for the user behind a valid session.
+export async function updateProfile(token, updates) {
+	// Reuse the session lookup so expired and unknown tokens are rejected.
+	const authenticatedUser = await getCurrentUser(token);
+
+	// Profile updates must be a plain object containing fields to change.
+	if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+		throw new TypeError('Profile updates must be an object');
+	}
+
+	// Password changes belong in resetPassword, not in profile updates.
+	const allowedFields = new Set(['firstName', 'lastName', 'country', 'email']);
+	for (const field of Object.keys(updates)) {
+		if (!allowedFields.has(field)) {
+			throw new Error(`Cannot update profile field: ${field}`);
+		}
+	}
+
+	const users = await readJson('users.json');
+	const user = users.find((savedUser) => savedUser.id === authenticatedUser.id);
+
+	if (!user) {
+		throw new Error('Invalid or expired session');
+	}
+
+	if (Object.hasOwn(updates, 'email')) {
+		const normalizedEmail = validateEmail(updates.email).toLowerCase();
+		const emailInUse = users.some(
+			(savedUser) => savedUser.id !== user.id && savedUser.email === normalizedEmail
+		);
+
+		if (emailInUse) {
+			throw new Error('A user with this email already exists');
+		}
+
+		user.email = normalizedEmail;
+	}
+
+	for (const field of ['firstName', 'lastName', 'country']) {
+		if (Object.hasOwn(updates, field)) {
+			user[field] = updates[field];
+		}
+	}
+
+	user.updatedAt = new Date().toISOString();
+	await writeJson('users.json', users);
+
+	// Return the updated user without exposing the password hash.
+	const { passwordHash, ...safeUser } = user;
+	return safeUser;
 }
 
 // Create a temporary password-reset token for a registered email address.

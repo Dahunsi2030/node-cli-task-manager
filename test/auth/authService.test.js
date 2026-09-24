@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { hashPassword } from '../../src/auth/password.js';
-import { loginUser, logout } from '../../src/auth/authService.js';
+import { getCurrentUser, loginUser, logout, updateProfile } from '../../src/auth/authService.js';
 import { readJson } from '../../src/utils/readJson.js';
 import { writeJson } from '../../src/utils/writeJson.js';
 
 const testUser = {
 	id: 'login-test-user',
 	email: 'login@example.com',
-	password: 'correct-password'
+	password: 'correct-password',
+	firstName: 'Old',
+	lastName: 'Name',
+	country: 'Old Country'
 };
 
 // Replace the real data with one known user for the duration of a test.
@@ -20,6 +23,10 @@ async function withTestUser(callback) {
 	await writeJson('users.json', [{
 		id: testUser.id,
 		email: testUser.email,
+		firstName: testUser.firstName,
+		lastName: testUser.lastName,
+		country: testUser.country,
+		updatedAt: '2026-01-01T00:00:00.000Z',
 		passwordHash
 	}]);
 	await writeJson('auth.json', []);
@@ -44,6 +51,7 @@ test('loginUser succeeds with correct credentials', async () => {
 		assert.equal(result.user.email, testUser.email);
 		assert.equal(result.user.passwordHash, undefined);
 		assert.equal(sessions.length, 1);
+		assert.equal(sessions[0].type, 'session');
 		assert.equal(sessions[0].token, result.token);
 		assert.equal(sessions[0].userId, testUser.id);
 	});
@@ -101,5 +109,116 @@ test('logout removes the authenticated session', async () => {
 
 		assert.equal(removed, true);
 		assert.equal(sessions.some((session) => session.token === loginResult.token), false);
+	});
+});
+
+// Confirm that a valid session token returns the user without the password hash.
+test('getCurrentUser returns the user for a valid token', async () => {
+	await withTestUser(async () => {
+		const loginResult = await loginUser(testUser.email, testUser.password);
+		const user = await getCurrentUser(loginResult.token);
+
+		assert.equal(user.id, testUser.id);
+		assert.equal(user.email, testUser.email);
+		assert.equal(user.passwordHash, undefined);
+	});
+});
+
+// Confirm that a token not stored in auth.json is rejected.
+test('getCurrentUser rejects an invalid token', async () => {
+	await withTestUser(async () => {
+		await assert.rejects(
+			getCurrentUser('invalid-token'),
+			{ message: 'Invalid or expired session' }
+		);
+	});
+});
+
+// Confirm that an expired session token is rejected.
+test('getCurrentUser rejects an expired token', async () => {
+	await withTestUser(async () => {
+		const loginResult = await loginUser(testUser.email, testUser.password);
+		const sessions = await readJson('auth.json');
+		sessions[0].expiresAt = new Date(Date.now() - 1000).toISOString();
+		await writeJson('auth.json', sessions);
+
+		await assert.rejects(
+			getCurrentUser(loginResult.token),
+			{ message: 'Invalid or expired session' }
+		);
+	});
+});
+
+// Confirm that all allowed profile fields update and sensitive data is preserved.
+test('updateProfile updates fields and preserves the password hash', async () => {
+	await withTestUser(async () => {
+		const loginResult = await loginUser(testUser.email, testUser.password);
+		const before = await readJson('users.json');
+		const updated = await updateProfile(loginResult.token, {
+			firstName: 'New First',
+			lastName: 'New Last',
+			country: 'New Country',
+			email: ' UPDATED@example.com '
+		});
+		const savedUsers = await readJson('users.json');
+
+		assert.equal(updated.firstName, 'New First');
+		assert.equal(updated.lastName, 'New Last');
+		assert.equal(updated.country, 'New Country');
+		assert.equal(updated.email, 'updated@example.com');
+		assert.equal(updated.passwordHash, undefined);
+		assert.equal(savedUsers[0].passwordHash, before[0].passwordHash);
+		assert.notEqual(savedUsers[0].updatedAt, before[0].updatedAt);
+	});
+});
+
+// Confirm that an email already owned by another user is rejected.
+test('updateProfile rejects a duplicate email', async () => {
+	await withTestUser(async () => {
+		const users = await readJson('users.json');
+		users.push({
+			id: 'other-user',
+			email: 'other@example.com',
+			passwordHash: await hashPassword('other-password')
+		});
+		await writeJson('users.json', users);
+		const loginResult = await loginUser(testUser.email, testUser.password);
+
+		await assert.rejects(
+			updateProfile(loginResult.token, { email: 'OTHER@example.com' }),
+			{ message: 'A user with this email already exists' }
+		);
+	});
+});
+
+// Confirm that protected fields cannot be changed through profile updates.
+test('updateProfile rejects protected fields', async () => {
+	await withTestUser(async () => {
+		const loginResult = await loginUser(testUser.email, testUser.password);
+
+		await assert.rejects(
+			updateProfile(loginResult.token, { passwordHash: 'changed' }),
+			{ message: 'Cannot update profile field: passwordHash' }
+		);
+	});
+});
+
+// Confirm that an invalid or expired session cannot update a profile.
+test('updateProfile rejects invalid and expired tokens', async () => {
+	await withTestUser(async () => {
+		await assert.rejects(
+			updateProfile('invalid-token', { country: 'Nowhere' }),
+			{ message: 'Invalid or expired session' }
+		);
+
+		const loginResult = await loginUser(testUser.email, testUser.password);
+		const sessions = await readJson('auth.json');
+		sessions[0].expiresAt = new Date(Date.now() - 1000).toISOString();
+		await writeJson('auth.json', sessions);
+
+		await assert.rejects(
+			updateProfile(loginResult.token, { country: 'Nowhere' }),
+			{ message: 'Invalid or expired session' }
+		);
 	});
 });
